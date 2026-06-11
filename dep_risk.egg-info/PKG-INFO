@@ -1,0 +1,347 @@
+Metadata-Version: 2.4
+Name: dep-risk
+Version: 1.0.0
+Summary: Supply chain risk scorer for npm, pip, and cargo dependencies
+Author-email: dilates <dilateig@gmail.com>
+License: MIT
+Project-URL: Homepage, https://github.com/dilates/dep-risk
+Project-URL: Repository, https://github.com/dilates/dep-risk
+Project-URL: Bug Tracker, https://github.com/dilates/dep-risk/issues
+Keywords: security,supply-chain,dependencies,npm,pip,cargo
+Classifier: Development Status :: 4 - Beta
+Classifier: Environment :: Console
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Security
+Classifier: Topic :: Software Development :: Build Tools
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: httpx>=0.25.0
+Requires-Dist: rich>=13.0.0
+Requires-Dist: tomli>=2.0.0; python_version < "3.11"
+Provides-Extra: dev
+Requires-Dist: pytest>=7.4.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.23.0; extra == "dev"
+Requires-Dist: pytest-cov>=4.1.0; extra == "dev"
+
+# dep-risk
+
+**Supply chain risk scorer for npm, pip, and cargo dependencies.**
+
+dep-risk goes beyond CVE scanning to detect the attacks CVE scanners miss: malicious maintainer takeovers, dependency confusion, typosquatting, and suspicious install scripts.
+
+> **Author:** [https://github.com/dilates](https://github.com/dilates)
+
+---
+
+## Philosophy
+
+dep-risk does **not** replace Snyk or Dependabot. It catches the class of attacks they miss:
+
+- Maintainer accounts sold or compromised after years of legitimate use
+- Ownership transfers with no announcement
+- `postinstall` scripts that download and execute remote payloads
+- Typosquat packages sitting one keystroke away from popular names
+- Packages released without corresponding source code commits
+
+---
+
+## Installation
+
+```bash
+pip install dep-risk
+```
+
+Or from source:
+
+```bash
+git clone https://github.com/dilates/dep-risk
+cd dep-risk
+pip install -e .
+```
+
+**Requirements:** Python 3.11+
+
+---
+
+## Quick Start
+
+```bash
+# Scan current directory (auto-detects npm/pip/cargo)
+dep-risk
+
+# Scan a specific project
+dep-risk /path/to/my-project
+
+# Show only high and critical packages
+dep-risk --min-risk high
+
+# Export an HTML report
+dep-risk --output report.html
+
+# CI mode (exits 1 if HIGH or CRITICAL packages found)
+dep-risk --ci
+
+# Machine-readable JSON output
+dep-risk --json | jq '.[] | select(.risk_level=="critical")'
+
+# Include dev dependencies
+dep-risk --include-dev
+
+# Use a GitHub token for higher rate limits (60 → 5000 req/hr)
+dep-risk --github-token ghp_yourtoken
+# or: export GITHUB_TOKEN=ghp_yourtoken
+```
+
+---
+
+## Risk Levels
+
+| Score | Level    | Meaning |
+|-------|----------|---------|
+| 0–20  | LOW      | No significant supply chain concerns detected |
+| 21–45 | MEDIUM   | Some risk signals present, review recommended |
+| 46–70 | HIGH     | Significant risk signals, manual review required |
+| 71–100| CRITICAL | Do not use without thorough manual security review |
+
+---
+
+## Risk Signals
+
+dep-risk scores 7 dimensions of supply chain risk:
+
+### Maintainer (weight: 25%)
+- Single maintainer with no backup
+- Maintainer exodus (>3 → 1 in 6 months)
+- New maintainer added in the last 30 days with few other packages
+- Very recent ownership change (last 7 days)
+- Full maintainer set replaced between versions
+
+### Activity (weight: 15%)
+- Last commit > 2 years ago
+- Last commit > 5 years ago
+- No commits in 90 days but active issue filing
+- Release without corresponding code commits
+- Repository archived
+
+### Install Scripts (weight: 30%)
+- npm `preinstall`/`postinstall`/`install`/`prepare` scripts present
+- Network calls during install (`curl`, `wget`, `fetch`)
+- Dynamic code execution (`eval`, `exec`)
+- Environment variable exfiltration
+- Obfuscated scripts (high Shannon entropy)
+- pip: binary-only wheels with no source distribution
+
+### Typosquatting (weight: 20%)
+- Edit distance 1 from a top-1000 package
+- Edit distance 2 from a top-1000 package
+- Homoglyph substitutions (l↔1, O↔0, rn↔m)
+- Added/removed hyphens, pluralization
+
+### Version Anomalies (weight: 10%)
+- Weekend releases at 2am–5am UTC
+- Two major versions in 24 hours
+- Large version number skips
+- Yanked/unpublished versions
+- First-ever package from this maintainer
+
+### GitHub Health (weight: 10%)
+- No repository found
+- Repository archived
+- Stars < 10 with significant download count
+- Unusual fork/star ratio
+- 200+ open issues with no responses
+- No license
+- Topics: "deprecated", "unmaintained", "archived"
+
+### Name Entropy (weight: 5%)
+- High Shannon entropy (random-looking names)
+- Mixed case + numbers in unusual patterns
+- Extremely short names (1–2 chars)
+- Common word with number appended (e.g., `axios2`)
+
+---
+
+## CLI Reference
+
+```
+dep-risk [PATH] [OPTIONS]
+
+Arguments:
+  PATH                    Directory to scan (default: current directory)
+
+Options:
+  --ecosystem {npm,pip,cargo,auto}   Ecosystems to scan (default: auto)
+  --min-risk {low,medium,high,critical}  Show packages at or above this level
+  --include-dev                      Include dev dependencies
+  --output FILE                      Export HTML report to file
+  --json                             Output JSON to stdout (pipe-friendly)
+  --ci                               CI mode: exit 1 if any packages fail threshold
+  --fail-on {low,medium,high,critical}  CI failure threshold (default: high)
+  --no-cache                         Bypass cache, fetch fresh data
+  --github-token TOKEN               GitHub API token
+  --config PATH                      Config file (default: .dep-risk.toml)
+  --workers N                        Parallel fetch workers (default: 10)
+  --version                          Show version info
+  --verbose                          Show scorer breakdowns per package
+```
+
+---
+
+## Configuration
+
+Create `.dep-risk.toml` in your project root (or `~/.dep-risk.toml` for global config):
+
+```toml
+[dep-risk]
+exclude = ["my-internal-lib", "company-utils"]
+min_risk = "medium"
+include_dev = false
+fail_on = "high"
+github_token = ""
+workers = 10
+
+[dep-risk.weights]
+maintainer = 0.25
+activity = 0.15
+install_script = 0.30
+typosquat = 0.20
+version = 0.10
+github = 0.10
+entropy = 0.05
+```
+
+Weights are automatically renormalized if they don't sum to 1.0.
+
+---
+
+## CI Integration
+
+### GitHub Actions
+
+```yaml
+- name: Run dep-risk
+  run: |
+    pip install dep-risk
+    dep-risk --ci --fail-on high --github-token ${{ secrets.GITHUB_TOKEN }}
+```
+
+### GitLab CI
+
+```yaml
+dep-risk:
+  script:
+    - pip install dep-risk
+    - dep-risk --ci --fail-on high
+  allow_failure: false
+```
+
+---
+
+## False Positive?
+
+dep-risk uses heuristics that can produce false positives. Here's how to tune them:
+
+### Exclude known-safe packages
+
+```toml
+[dep-risk]
+exclude = ["my-private-registry-pkg", "vendored-lib"]
+```
+
+### Adjust scorer weights
+
+If install scripts are expected in your ecosystem (e.g., native addons), reduce the weight:
+
+```toml
+[dep-risk.weights]
+install_script = 0.10
+maintainer = 0.35
+typosquat = 0.25
+activity = 0.15
+version = 0.10
+github = 0.10
+entropy = 0.05
+```
+
+### Raise the minimum risk threshold
+
+Only alert on packages with score > 45 (HIGH+):
+
+```toml
+[dep-risk]
+min_risk = "high"
+fail_on = "critical"
+```
+
+### Common false positive patterns
+
+- **Single-maintainer packages**: Many legitimate small utilities have one maintainer. If you've verified the package, exclude it.
+- **Weekend releases**: Open-source contributors release on their own schedule. This signal is weighted low (version scorer weight = 10%).
+- **Low stars on internal forks**: Private forks of public packages may have low stars. Exclude these.
+- **Build scripts in Rust**: `build.rs` is common and legitimate in Rust crates. The install_script scorer notes it but doesn't weight it heavily.
+
+---
+
+## JSON Output
+
+```bash
+dep-risk --json | jq '.[] | select(.risk_level == "critical") | {name, version, total_score, flags}'
+```
+
+Output schema:
+```json
+{
+  "name": "malicious-pkg",
+  "version": "1.0.2",
+  "ecosystem": "npm",
+  "registry_url": "https://registry.npmjs.org/malicious-pkg",
+  "github_url": "https://github.com/user/malicious-pkg",
+  "total_score": 94.0,
+  "risk_level": "critical",
+  "flags": ["Very recent ownership change — new-owner added 2d ago", "Downloads during postinstall (curl)"],
+  "fetch_errors": [],
+  "scores": {
+    "maintainer": {"scorer": "maintainer", "score": 62.0, "weight": 0.25, "finding": "...", "detail": "...", "evidence": {}},
+    ...
+  }
+}
+```
+
+---
+
+## Caching
+
+dep-risk caches all registry and GitHub API responses in `~/.cache/dep-risk/cache.db` (SQLite).
+
+| Data type       | TTL       |
+|----------------|-----------|
+| Registry data   | 1 hour    |
+| GitHub data     | 6 hours   |
+| Typosquat lists | 24 hours  |
+
+Bypass cache: `dep-risk --no-cache`
+
+---
+
+## Development
+
+```bash
+git clone https://github.com/dilates/dep-risk
+cd dep-risk
+pip install -e ".[dev]"
+pytest
+```
+
+---
+
+## License
+
+MIT — see LICENSE file.
+
+---
+
+*dep-risk v1.0.0 — [https://github.com/dilates](https://github.com/dilates)*
