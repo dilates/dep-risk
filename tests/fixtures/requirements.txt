@@ -1,0 +1,10 @@
+# Test requirements file
+requests==2.31.0
+numpy>=1.24.0
+flask~=2.3.0
+git+https://github.com/example/some-lib.git#egg=some-lib
+pillow[jpeg]==10.0.0
+django>=4.2,<5.0
+# dev tools
+pytest==7.4.0
+black==23.7.0

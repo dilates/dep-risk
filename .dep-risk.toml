@@ -1,0 +1,28 @@
+[dep-risk]
+# Packages to exclude from scanning (known-safe, internal packages)
+exclude = ["my-internal-lib", "company-utils"]
+
+# Minimum risk level to report in terminal output
+min_risk = "medium"
+
+# Include dev dependencies in the scan
+include_dev = false
+
+# CI failure threshold: low | medium | high | critical
+fail_on = "high"
+
+# GitHub token (prefer GITHUB_TOKEN env var instead)
+github_token = ""
+
+# Parallel fetch workers
+workers = 10
+
+# Scorer weights — must sum to 1.0 (will be renormalized if they don't)
+[dep-risk.weights]
+maintainer = 0.25
+activity = 0.15
+install_script = 0.30
+typosquat = 0.20
+version = 0.10
+github = 0.10
+entropy = 0.05

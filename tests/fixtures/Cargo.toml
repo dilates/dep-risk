@@ -1,0 +1,18 @@
+[package]
+name = "test-project"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1.0", features = ["full"] }
+reqwest = "0.11"
+anyhow = "1.0"
+rand = "0.8"
+some-obscure-crate-x7z = "0.1.0"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[build-dependencies]
+cc = "1.0"
