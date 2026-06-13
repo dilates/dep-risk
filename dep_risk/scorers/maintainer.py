@@ -27,6 +27,8 @@ class MaintainerScorer:
             score, findings, detail_lines, evidence = _score_pip(registry_data)
         elif dep.ecosystem == "cargo":
             score, findings, detail_lines, evidence = _score_cargo(registry_data)
+        elif dep.ecosystem == "aur":
+            score, findings, detail_lines, evidence = _score_aur(registry_data)
 
         score = min(100.0, score)
         finding = findings[0] if findings else "No maintainer concerns detected"
@@ -170,6 +172,32 @@ def _score_pip(data: Any) -> tuple[float, list[str], list[str], dict[str, Any]]:
         score += 20
         findings.append("Single maintainer/author on PyPI")
         details.append(f"Only one listed maintainer: {maintainers[0] if maintainers else 'unknown'}")
+
+    return score, findings, details, evidence
+
+
+def _score_aur(data: Any) -> tuple[float, list[str], list[str], dict[str, Any]]:
+    from dep_risk.sources.aur import AurPackageData
+    score = 0.0
+    findings: list[str] = []
+    details: list[str] = []
+    evidence: dict[str, Any] = {}
+
+    if not isinstance(data, AurPackageData):
+        return score, findings, details, evidence
+
+    evidence["maintainer"] = data.maintainer
+    evidence["submitter"] = data.submitter
+
+    if data.maintainer is None:
+        score += 50
+        findings.append("Orphaned AUR package — no maintainer")
+        details.append("This AUR package has no maintainer. Anyone can adopt it and modify the PKGBUILD.")
+    elif data.maintainer != data.submitter and data.submitter:
+        score += 30
+        findings.append(f"AUR maintainer differs from original submitter ({data.submitter} → {data.maintainer})")
+        details.append(f"Package was originally submitted by '{data.submitter}' but is now maintained by '{data.maintainer}'.")
+        evidence["ownership_changed"] = True
 
     return score, findings, details, evidence
 

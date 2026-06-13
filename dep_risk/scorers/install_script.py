@@ -52,6 +52,8 @@ class InstallScriptScorer:
             score, findings, details, evidence = _score_pip(registry_data)
         elif dep.ecosystem == "cargo":
             score, findings, details, evidence = _score_cargo(registry_data)
+        elif dep.ecosystem == "aur":
+            score, findings, details, evidence = _score_aur(registry_data)
 
         score = min(100.0, score)
         finding = findings[0] if findings else "No dangerous install scripts detected"
@@ -150,6 +152,65 @@ def _score_pip(data: Any) -> tuple[float, list[str], list[str], dict[str, Any]]:
         findings.append("Only binary wheels available — no source distribution")
         details.append("Package only ships precompiled binaries (no sdist), cannot inspect source code.")
         evidence["binary_only"] = True
+
+    return score, findings, details, evidence
+
+
+_PKGBUILD_SKIP_CHECKSUM_RE = re.compile(r"sha\w+sums\s*=\s*\(\s*['\"]SKIP['\"]", re.IGNORECASE)
+_PKGBUILD_BASE64_RE = re.compile(r"\|\s*base64\s*(-d|--decode)", re.IGNORECASE)
+_PKGBUILD_OUTSIDE_PKGDIR_RE = re.compile(r"\b(cp|install|mv)\b[^#\n]*/(?!usr|etc|opt|srv|var)\w", re.IGNORECASE)
+
+
+def _score_aur(data: Any) -> tuple[float, list[str], list[str], dict[str, Any]]:
+    from dep_risk.sources.aur import AurPackageData
+    score = 0.0
+    findings: list[str] = []
+    details: list[str] = []
+    evidence: dict[str, Any] = {}
+
+    if not isinstance(data, AurPackageData):
+        return score, findings, details, evidence
+
+    pkgbuild = data.pkgbuild
+    if not pkgbuild:
+        score += 20
+        findings.append("PKGBUILD could not be fetched — cannot inspect install script")
+        details.append("Unable to retrieve PKGBUILD from AUR for static analysis.")
+        evidence["pkgbuild_missing"] = True
+        return score, findings, details, evidence
+
+    evidence["pkgbuild_length"] = len(pkgbuild)
+
+    if _DOWNLOAD_RE.search(pkgbuild):
+        score += 40
+        findings.append("PKGBUILD makes network requests at build/install time")
+        details.append("PKGBUILD contains curl/wget/fetch — downloads content at build time.")
+        evidence["pkgbuild_downloads"] = True
+
+    if _EVAL_RE.search(pkgbuild):
+        score += 60
+        findings.append("PKGBUILD uses eval/exec (dynamic code execution)")
+        details.append("PKGBUILD contains eval or exec patterns — high risk of code injection.")
+        evidence["pkgbuild_eval"] = True
+
+    if _PKGBUILD_BASE64_RE.search(pkgbuild):
+        score += 70
+        findings.append("PKGBUILD decodes base64 at build time — possible obfuscated payload")
+        details.append("PKGBUILD pipes output through base64 --decode, a common obfuscation technique.")
+        evidence["pkgbuild_base64"] = True
+
+    if _PKGBUILD_SKIP_CHECKSUM_RE.search(pkgbuild):
+        score += 50
+        findings.append("PKGBUILD skips checksum validation (SKIP)")
+        details.append("sha256sums or similar set to 'SKIP' — source integrity not verified.")
+        evidence["pkgbuild_skip_checksum"] = True
+
+    entropy = _shannon_entropy(pkgbuild)
+    if entropy > _OBFUSCATION_ENTROPY_THRESHOLD:
+        score += 50
+        findings.append(f"High-entropy PKGBUILD content (entropy {entropy:.2f}) — possible obfuscation")
+        details.append(f"Shannon entropy {entropy:.2f} bits/char suggests obfuscated content in PKGBUILD.")
+        evidence["pkgbuild_entropy"] = entropy
 
     return score, findings, details, evidence
 

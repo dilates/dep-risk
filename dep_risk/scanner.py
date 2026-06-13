@@ -9,6 +9,7 @@ import httpx
 
 from dep_risk.cache import Cache, get_default_cache
 from dep_risk.config import Config
+from dep_risk.parsers.aur import parse_aur_packages
 from dep_risk.parsers.cargo import parse_cargo_lock, parse_cargo_toml
 from dep_risk.parsers.npm import parse_node_modules, parse_package_json, parse_package_lock
 from dep_risk.parsers.pip import parse_pipfile, parse_pyproject_toml, parse_requirements_txt
@@ -22,6 +23,7 @@ from dep_risk.scorers import (
     VersionScorer,
 )
 from dep_risk.scorers.base import Dependency, PackageResult
+from dep_risk.sources.aur import AurRegistry
 from dep_risk.sources.crates import CratesRegistry
 from dep_risk.sources.github import GitHubSource, parse_github_url
 from dep_risk.sources.npm_registry import NpmRegistry
@@ -51,6 +53,8 @@ def detect_ecosystems(directory: Path) -> list[str]:
         ecosystems.append("pip")
     if (directory / "Cargo.toml").exists():
         ecosystems.append("cargo")
+    if (directory / "packages.aur").exists():
+        ecosystems.append("aur")
     return ecosystems
 
 
@@ -100,6 +104,11 @@ def collect_dependencies(
         elif toml.exists():
             all_deps.extend(parse_cargo_toml(toml))
 
+    if "aur" in ecosystems:
+        aur_file = directory / "packages.aur"
+        if aur_file.exists():
+            all_deps.extend(parse_aur_packages(aur_file))
+
     filtered: list[Dependency] = []
     seen: set[str] = set()
     for dep in all_deps:
@@ -125,6 +134,7 @@ class Scanner:
         self._npm = NpmRegistry(cache=self._cache)
         self._pypi = PypiRegistry(cache=self._cache)
         self._crates = CratesRegistry(cache=self._cache)
+        self._aur = AurRegistry(cache=self._cache)
         self._github = GitHubSource(token=config.github_token, cache=self._cache)
 
     async def scan(
@@ -234,6 +244,10 @@ class Scanner:
             data = await self._crates.fetch_package(dep.name, client)
             url = f"https://crates.io/crates/{dep.name}"
             return data, url
+        if dep.ecosystem == "aur":
+            data = await self._aur.fetch_package(dep.name, client)
+            url = f"https://aur.archlinux.org/packages/{dep.name}"
+            return data, url
         return None, ""
 
 
@@ -246,6 +260,8 @@ def _extract_repo_url(registry_data: object, ecosystem: str) -> str:
         return getattr(registry_data, "repository_url", "") or getattr(registry_data, "home_page", "") or ""
     if ecosystem == "cargo":
         return getattr(registry_data, "repository", "") or ""
+    if ecosystem == "aur":
+        return getattr(registry_data, "repository_url", "") or getattr(registry_data, "url", "") or ""
     return ""
 
 
