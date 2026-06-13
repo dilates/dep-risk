@@ -33,6 +33,9 @@ class ActivityScorer:
         details: list[str] = []
         evidence: dict[str, Any] = {}
 
+        if dep.ecosystem == "aur":
+            return await self._score_aur(dep, registry_data, github_data)
+
         pushed_at: Optional[str] = None
         archived = False
         has_source = False
@@ -93,6 +96,71 @@ class ActivityScorer:
         finding = findings[0] if findings else "No activity concerns detected"
         detail = "\n".join(details) if details else "Project appears actively maintained."
 
+        return RiskScore(
+            scorer=self.name,
+            score=score,
+            weight=self.weight,
+            finding=finding,
+            detail=detail,
+            evidence=evidence,
+        )
+
+
+    async def _score_aur(
+        self,
+        dep: Dependency,
+        registry_data: Any,
+        github_data: Any,
+    ) -> RiskScore:
+        from dep_risk.sources.aur import AurPackageData
+        score = 0.0
+        findings: list[str] = []
+        details: list[str] = []
+        evidence: dict[str, Any] = {}
+
+        if isinstance(registry_data, AurPackageData):
+            now_ts = datetime.now(timezone.utc).timestamp()
+            evidence["last_modified"] = registry_data.last_modified
+            evidence["out_of_date"] = registry_data.out_of_date
+            evidence["num_votes"] = registry_data.num_votes
+
+            if registry_data.out_of_date:
+                days_flagged = (now_ts - registry_data.out_of_date) / 86400
+                score += 30
+                findings.append(f"Flagged out-of-date {int(days_flagged)} days ago")
+                details.append(f"AUR package has been flagged as out-of-date for {int(days_flagged)} days.")
+
+            if registry_data.last_modified:
+                days_stale = (now_ts - registry_data.last_modified) / 86400
+                if days_stale > 5 * 365:
+                    score += 50
+                    findings.append(f"Long-abandoned — not updated in {int(days_stale / 365)} years")
+                    details.append(f"PKGBUILD last modified {int(days_stale)} days ago.")
+                elif days_stale > 2 * 365:
+                    score += 30
+                    findings.append(f"Stale PKGBUILD — not updated in {int(days_stale / 365)} years")
+                    details.append(f"PKGBUILD last modified {int(days_stale)} days ago.")
+
+            if registry_data.num_votes < 10:
+                score += 25
+                findings.append(f"Very low community scrutiny — only {registry_data.num_votes} votes")
+                details.append("Fewer than 10 AUR votes means very few users have reviewed this PKGBUILD.")
+            elif registry_data.num_votes < 50:
+                score += 10
+                findings.append(f"Low AUR votes ({registry_data.num_votes}) — limited community review")
+
+        if github_data is not None:
+            from dep_risk.sources.github import GitHubRepoData
+            if isinstance(github_data, GitHubRepoData):
+                if github_data.archived:
+                    score += 35
+                    findings.append("Upstream repository is archived")
+                    details.append("The upstream GitHub repository is archived.")
+                    evidence["archived"] = True
+
+        score = min(100.0, score)
+        finding = findings[0] if findings else "No activity concerns detected"
+        detail = "\n".join(details) if details else "AUR package appears actively maintained."
         return RiskScore(
             scorer=self.name,
             score=score,

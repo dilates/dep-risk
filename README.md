@@ -2,11 +2,11 @@
 
 # dep-risk
 
-**Supply chain risk scorer for npm, pip, and cargo dependencies.**
+**Supply chain risk scorer for npm, pip, cargo, and AUR dependencies.**
 
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue?logo=python&logoColor=white)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Ecosystems](https://img.shields.io/badge/ecosystems-npm%20%7C%20pip%20%7C%20cargo-orange)](https://github.com/dilates/dep-risk)
+[![Ecosystems](https://img.shields.io/badge/ecosystems-npm%20%7C%20pip%20%7C%20cargo%20%7C%20aur-orange)](https://github.com/dilates/dep-risk)
 
 *Catches the attacks CVE scanners miss — maintainer takeovers, typosquatting, malicious install scripts, and ownership transfers.*
 
@@ -24,6 +24,7 @@ Snyk and Dependabot are great at catching known CVEs. They are blind to:
 - A Python package sitting one typo away from `requests` — uploaded yesterday
 - A crate whose `postinstall` script quietly `curl`s a remote payload
 - A GitHub repo marked deprecated but still pulling thousands of weekly installs
+- An AUR package whose PKGBUILD was modified to decode and execute a base64 payload
 
 dep-risk closes that gap. It scores every dependency across seven behavioural dimensions and surfaces the ones that deserve a second look — before they reach production.
 
@@ -34,7 +35,7 @@ dep-risk closes that gap. It scores every dependency across seven behavioural di
 ```
 ╭─────────────────────────────────────────────────────────────╮
 │ dep-risk scan — ./my-project                                │
-│ 127 packages scanned across 3 ecosystems                    │
+│ 127 packages scanned across 4 ecosystems                    │
 │ Completed in 4.2s (cached: 89, fresh: 38)                   │
 ╰─────────────────────────────────────────────────────────────╯
 
@@ -167,7 +168,7 @@ pip install -e .
 ## Quick Start
 
 ```bash
-# Scan the current directory — auto-detects npm, pip, and cargo
+# Scan the current directory — auto-detects npm, pip, cargo, and AUR
 dep-risk
 
 # Scan a specific project
@@ -196,7 +197,7 @@ dep-risk --github-token ghp_yourtoken
 
 ## How It Works
 
-dep-risk fetches live data from npm, PyPI, crates.io, and GitHub, then runs every package through seven scorers. Each scorer returns a score from 0–100 and a weighted contribution to the final risk score.
+dep-risk fetches live data from npm, PyPI, crates.io, the AUR RPC API, and GitHub, then runs every package through seven scorers. Each scorer returns a score from 0–100 and a weighted contribution to the final risk score.
 
 ### Risk Level Thresholds
 
@@ -206,6 +207,72 @@ dep-risk fetches live data from npm, PyPI, crates.io, and GitHub, then runs ever
 | 21–45  | `MEDIUM`    | Some signals present — review recommended |
 | 46–70  | `HIGH`      | Significant signals — manual review required |
 | 71–100 | `CRITICAL`  | Do not use without a thorough security review |
+
+---
+
+## AUR Support
+
+dep-risk scans Arch User Repository (AUR) packages listed in a `packages.aur` file in your project root. Place one package name per line:
+
+```
+# packages.aur
+yay
+paru
+spotify
+discord
+some-package=1.2.3
+```
+
+dep-risk fetches metadata from the [AUR RPC API](https://aur.archlinux.org/rpc/) and downloads each package's `PKGBUILD` for static analysis.
+
+### Why AUR packages are high-risk
+
+AUR packages are community-maintained shell scripts (`PKGBUILD`) that execute arbitrary code at build time. Unlike npm, PyPI, or crates.io, there is no registry-level vetting — the entire security model depends on the community reviewing each PKGBUILD before installation. This makes AUR a prime target:
+
+- **Orphaned packages** can be adopted by anyone and their PKGBUILD modified
+- **PKGBUILD files** have full shell access during `makepkg` — they can download, decrypt, and execute arbitrary payloads
+- **Checksum bypasses** (`sha256sums=('SKIP')`) remove source integrity verification
+- **Low-vote packages** have had fewer eyes reviewing the build script
+
+### AUR-specific signals
+
+| Signal | Scorer | Points |
+|--------|--------|--------|
+| Orphaned package (no maintainer) | Maintainer | +50 |
+| Maintainer changed from original submitter | Maintainer | +30 |
+| Flagged out-of-date | Activity | +30 |
+| PKGBUILD not updated in 2+ years | Activity | +30 |
+| PKGBUILD not updated in 5+ years | Activity | +50 |
+| Fewer than 10 AUR votes | Activity | +25 |
+| Fewer than 50 AUR votes | Activity | +10 |
+| Upstream repo archived | Activity | +35 |
+| PKGBUILD makes network requests (curl/wget) | Install Script | +40 |
+| PKGBUILD uses eval/exec | Install Script | +60 |
+| PKGBUILD decodes base64 at build time | Install Script | +70 |
+| PKGBUILD skips checksum validation (`SKIP`) | Install Script | +50 |
+| PKGBUILD has high entropy content | Install Script | +50 |
+| PKGBUILD not retrievable | Install Script | +20 |
+
+### CI integration for AUR
+
+```yaml
+# GitHub Actions — include packages.aur in trigger paths
+on:
+  push:
+    paths:
+      - 'packages.aur'
+      - 'package*.json'
+      - 'requirements*.txt'
+      - 'Cargo.*'
+```
+
+```bash
+# Scan only AUR packages
+dep-risk --ecosystem aur
+
+# Scan all ecosystems including AUR (auto-detected)
+dep-risk
+```
 
 ---
 
@@ -223,7 +290,10 @@ Detects ownership changes and suspicious maintainer patterns.
 | New maintainer added within last **7 days** | +60 |
 | Entire maintainer set replaced between versions | +50 |
 
-**Why it matters:** The XZ Utils backdoor (CVE-2024-3094), the event-stream attack, and dozens of npm incidents all began with a new or compromised maintainer account gaining publish rights.
+| Orphaned AUR package (no maintainer) | +50 |
+| AUR maintainer changed from original submitter | +30 |
+
+**Why it matters:** The XZ Utils backdoor (CVE-2024-3094), the event-stream attack, and dozens of npm incidents all began with a new or compromised maintainer account gaining publish rights. For AUR, orphaned packages are especially dangerous — anyone can adopt them and push a malicious PKGBUILD.
 
 ---
 
@@ -239,6 +309,11 @@ The #1 active attack vector in the npm ecosystem.
 | Hook reads `process.env` at install time | +30 |
 | Script entropy > 4.5 bits/char (obfuscated) | +80 |
 | pip: binary-only wheel, no source distribution | +50 |
+| AUR: PKGBUILD makes network requests (curl/wget) | +40 |
+| AUR: PKGBUILD uses eval/exec | +60 |
+| AUR: PKGBUILD decodes base64 at build time | +70 |
+| AUR: PKGBUILD skips checksum validation (`SKIP`) | +50 |
+| AUR: High-entropy PKGBUILD content | +50 |
 
 **Example of what gets caught:**
 
@@ -264,6 +339,11 @@ Detects abandoned and zombie packages.
 | Registry release with no corresponding GitHub commits (>7 day gap) | +40 |
 | Repository archived | +35 |
 | No source repository link anywhere | +25 |
+| AUR: package flagged out-of-date | +30 |
+| AUR: PKGBUILD not updated in 2+ years | +30 |
+| AUR: PKGBUILD not updated in 5+ years | +50 |
+| AUR: fewer than 10 votes | +25 |
+| AUR: fewer than 50 votes | +10 |
 
 ---
 
@@ -414,6 +494,7 @@ on:
       - 'Cargo.*'
       - 'Pipfile*'
       - 'pyproject.toml'
+      - 'packages.aur'
   schedule:
     - cron: '0 8 * * 1'   # also run every Monday
 
@@ -434,6 +515,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: dep-risk --ci --fail-on high
+        # AUR packages are auto-detected if packages.aur exists
 
       - name: Upload HTML report
         if: always()
@@ -467,6 +549,7 @@ dep-risk:
         - package*.json
         - requirements*.txt
         - Cargo.*
+        - packages.aur
 ```
 
 ---
@@ -483,7 +566,7 @@ repos:
         language: python
         entry: dep-risk --ci --fail-on critical
         additional_dependencies: [dep-risk]
-        files: ^(package\.json|requirements.*\.txt|Cargo\.toml|pyproject\.toml)$
+        files: ^(package\.json|requirements.*\.txt|Cargo\.toml|pyproject\.toml|packages\.aur)$
         pass_filenames: false
 ```
 
@@ -605,6 +688,8 @@ All registry and GitHub API responses are cached locally in `~/.cache/dep-risk/c
 | npm registry   | 1 hour      |
 | PyPI           | 1 hour      |
 | crates.io      | 1 hour      |
+| AUR RPC API    | 1 hour      |
+| AUR PKGBUILD   | 1 hour      |
 | GitHub API     | 6 hours     |
 
 ```bash
@@ -625,7 +710,7 @@ Arguments:
   PATH                          Directory to scan (default: current directory)
 
 Scan options:
-  --ecosystem {npm,pip,cargo,auto}   Ecosystems to scan (default: auto-detect)
+  --ecosystem {npm,pip,cargo,aur,auto}   Ecosystems to scan (default: auto-detect)
   --include-dev                      Include dev/test dependencies
   --min-risk {low,medium,high,critical}  Minimum level to display
 
@@ -773,6 +858,7 @@ done | jq -s 'flatten | unique_by(.name + .ecosystem)' > combined.json
 | uv   | ✅ via `pyproject.toml` (`[project]`) |
 | Pipenv | ✅ via `Pipfile` |
 | cargo | ✅ via `Cargo.toml` and `Cargo.lock` |
+| AUR (Arch) | ✅ via `packages.aur` |
 
 ---
 
@@ -799,8 +885,8 @@ dep_risk/
 ├── scanner.py          Async orchestrator — parsers → sources → scorers
 ├── config.py           TOML config loading
 ├── cache.py            SQLite TTL cache
-├── parsers/            npm · pip · cargo dependency file parsers
-├── sources/            npm registry · PyPI · crates.io · GitHub API clients
+├── parsers/            npm · pip · cargo · aur dependency file parsers
+├── sources/            npm registry · PyPI · crates.io · AUR RPC · GitHub API clients
 ├── scorers/            Seven scorer modules + base dataclasses
 └── report/             Rich terminal output · self-contained HTML report
 ```

@@ -37,7 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--ecosystem",
-        choices=["npm", "pip", "cargo", "auto"],
+        choices=["npm", "pip", "cargo", "aur", "auto"],
         default="auto",
         help="Ecosystems to scan (default: auto-detect)",
     )
@@ -117,7 +117,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     if args.version:
         print(f"dep-risk v{VERSION}")
-        print("Supply chain risk scorer for npm, pip, and cargo dependencies")
+        print("Supply chain risk scorer for npm, pip, cargo, and AUR dependencies")
         print("Scores maintainer churn, install scripts, typosquatting, and more")
         print(GITHUB_URL)
         return 0
