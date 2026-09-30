@@ -925,4 +925,3 @@ MIT © [dilates](https://github.com/dilates)
 *dep-risk v1.0.0 · [https://github.com/dilates](https://github.com/dilates)*
 
 </div>
- 
